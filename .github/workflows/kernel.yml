@@ -1,0 +1,35 @@
+name: Kernel validation
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and emulator dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang lld g++ make binutils python3 xorriso qemu-system-x86
+      - name: Fetch pinned Limine
+        run: |
+          git clone --depth=1 --branch=v8.7.0-binary https://github.com/limine-bootloader/limine.git vendor/limine
+          test "$(git -C vendor/limine rev-parse HEAD)" = aad3edd370955449717a334f0289dee10e2c5f01
+      - name: Host and ELF checks
+        run: make check
+      - name: Boot and monitor matrix
+        run: make smoke
+      - name: Userspace, multitasking and persistence
+        run: make system-smoke
+      - name: Framebuffer and PS/2 keyboard
+        run: make display-smoke
+      - name: Hardware exception tests
+        run: make fault-smoke
+      - name: Preserve emulator transcripts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-transcripts
+          path: |
+            build/*.log
+            build/fault/*.log
+            build/desktop.png
