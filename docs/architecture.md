@@ -68,11 +68,18 @@ charge des valeurs distinctes dans les GPR, positionne CF/DF et vérifie leur
 conservation après `INT3`.
 
 Le PIC est déplacé vers les vecteurs 32–47. IRQ0 pilote le PIT à environ 100 Hz,
-IRQ1 reçoit le clavier PS/2 traduit en scancodes set 1, IRQ4 reçoit COM1. Les
+IRQ1 reçoit le clavier PS/2 traduit en scancodes set 1, IRQ4 reçoit COM1 et
+IRQ12 reçoit la souris PS/2 (paquets de trois octets). Le PIC autorise aussi
+IRQ2 pour la cascade du contrôleur esclave. Les
 IRQ7/15 parasites sont traités par vérification des registres in-service.
-Clavier et UART alimentent une file de 1024 octets, avec notification de perte.
-La disposition clavier est US ; les touches de navigation et la souris ne sont
-pas implémentées.
+L'UART alimente une file console de 1024 octets, avec notification de perte.
+Le clavier graphique et la souris passent par une file de 256 événements, traitée
+par l'ordonnanceur avant le réveil des tâches. Le clavier rejoint la console
+uniquement lorsque Terminal a le focus ; Notes reçoit son propre texte. Sans
+framebuffer compatible, le clavier rejoint directement la console. La disposition
+clavier est US. Les scancodes étendus transmettent les flèches, Home/End,
+Page Up/Down et Delete à Notes ; les raccourcis Ctrl, Alt+Tab et F1–F3 passent
+par cette même file. Les touches de navigation ne sont pas transmises au shell.
 
 Les erreurs utilisateur terminent le processus avec le statut `128 + vecteur`.
 Les erreurs superviseur impriment les registres utiles et arrêtent la machine.
@@ -92,6 +99,7 @@ La table contient 16 slots et des PID monotones. Les états sont :
 | 3 | Attend un enfant |
 | 4 | Attend une échéance timer |
 | 5 | Zombie, statut conservé pour le parent |
+| 6 | Attend un événement de fenêtre |
 
 Le timer préempte uniquement du code utilisateur. À une interruption ou à la
 sortie d'un appel système, l'ordonnanceur sauvegarde la frame CPU du processus,
@@ -126,6 +134,7 @@ et structures stables pour cette version figurent dans `shared/abi.hpp`.
 | Processus | spawn, wait, exit, yield, sleep, ticks, liste et kill |
 | Fichiers | Lecture/écriture complète, list, stat, mkdir, unlink, sync |
 | Système | Diagnostics et reboot, réservés au shell initial |
+| Graphique | window_open, window_present, window_event, window_close, desktop_launch |
 
 Chaque pointeur est validé par parcours des tables utilisateur et des permissions
 avant copie. Les transferts passent par des buffers noyau, jamais par une
@@ -169,19 +178,79 @@ avec les systèmes de fichiers Linux.
 
 ## Affichage
 
-Le framebuffer RGB 32 bits affiche un terminal à police bitmap, une barre de
-titre et des repères de commandes. La sortie réelle de la console s'y reflète,
-avec défilement, curseur et effacement ANSI simple. Aucun serveur de fenêtres,
-protocole graphique utilisateur ou contrôle cliquable n'est simulé. Les glyphes
-ASCII dérivent de DejaVu Sans Mono ; le fichier généré est versionné pour que
-la compilation ne dépende pas de FreeType/Pillow.
+Le framebuffer RGB 32 bits (640×480 à 1920×1080) affiche un bureau avec trois
+fenêtres : Terminal, Files et Notes. Une pile définit leur ordre visuel ; le clic
+change le focus, la barre de titre permet le déplacement, la réduction et la
+maximisation/restauration. La barre inférieure et F1–F3 ouvrent les applications ;
+Alt+Tab parcourt les fenêtres visibles. Fermer Terminal masque sa fenêtre sans terminer le shell. Fermer Files termine
+son processus ; Notes propose de sauvegarder ses modifications avant de quitter. Au lancement du shell, la grille locale
+affiche les raccourcis du bureau ; les diagnostics de démarrage restent sur la
+console série.
+
+Files parcourt TahaFS avec pagination, création de répertoire et aperçu limité
+à 2047 octets. L'action Edit in Notes charge le fichier dans l'éditeur. Le modèle
+`shared/text_editor.hpp` contient un document borné à 32768 octets, une position
+de curseur et un indicateur de modification ; il fournit insertion, suppression,
+navigation et conversion entre position et ligne/colonne visuelle. Les tabulations
+s'affichent comme une cellule. Un historique borné de 256 insertions/suppressions
+permet Undo/Redo et restaure le curseur. Chaque modification reçoit une révision
+distincte ; la révision sauvegardée détermine le marqueur de modification, même
+après undo/redo ou création d’une nouvelle branche. Un chargement réussi remet
+l’historique à zéro ; un chargement refusé le conserve. Notes utilise les transactions TahaFS pour Save et
+Save As. Open valide tout le texte avant de remplacer le document courant ; les
+fichiers binaires et trop grands sont refusés. Les permissions TahaFS interdisent
+l'écriture des fichiers système, qui peuvent être copiés sous un autre nom.
+
+Une machine d'états de dialogue gère les chemins, les erreurs, le remplacement
+d'un autre fichier et les modifications non enregistrées lors d'un changement
+de document. Une opération en attente n'est exécutée qu'après sauvegarde réussie
+ou abandon explicite. Échap annule. Ces dialogues ne bloquent pas les processus
+utilisateur : ils ne capturent que les entrées locales du bureau. Le redémarrage
+reste une commande du shell et ne demande pas d'enregistrer les documents ouverts.
+
+Files et Notes sont des ELF en ring 3 avec leurs propres espaces d’adressage.
+Le noyau conserve le compositeur et les décorations. `shared/gui.hpp` définit
+les commandes de dessin et les événements ; `user/gui.hpp` fournit les widgets.
+
+`window_open` réserve le slot 1 ou 2 au PID appelant ; le slot 0 appartient au
+terminal. Un processus possède au plus une fenêtre et ne peut prendre celle
+d’un autre. `window_present` copie et valide au plus 512 commandes (rectangles
+ou texte ASCII terminé par zéro), puis remplace la liste affichée. Le dessin
+est limité à la zone cliente, sans accès utilisateur au framebuffer.
+
+`window_event` délivre redimensionnement, touche, clic, fermeture, ouverture de
+document ou perte d’entrées. Son second argument vaut 0 pour une lecture immédiate
+(`abi::again` si vide), ou 1 pour bloquer sans consommer de CPU. La file circulaire
+contient au plus 63 événements ; une saturation déclenche `input_lost` et permet
+aux applications d’annuler leurs dialogues incomplets. Les notifications de
+redimensionnement et de fermeture sont conservées séparément.
+
+`desktop_launch` démarre Files/Notes en tâche détachée ou transmet un chemin à
+l’instance existante. `window_close`, la sortie, une faute et `kill` libèrent la
+fenêtre et ses événements. Fermer une fenêtre sans en posséder est sans effet.
+Les pointeurs et permissions sont vérifiés comme pour les autres appels système.
+Le terminal conserve sa grille, son défilement et son effacement ANSI simple.
+Deux buffers statiques de 1920×1080 pixels occupent environ 16 Mio : composition
+en RAM, puis copie des seuls pixels modifiés vers le framebuffer. Le rafraîchissement
+est limité à une fois tous les trois ticks. Les IRQ restent autorisées pendant
+la peinture ; elles ne font qu'enfiler les entrées et le timer ne préempte pas
+le code noyau. Le traitement des événements et les opérations TahaFS ont lieu
+avec les IRQ désactivées, hors des handlers, sans réentrance du système de fichiers.
+Une saturation de la file abandonne les nouveaux événements et annule le glissement
+en cours pour éviter de conserver un bouton bloqué. Les paniques forcent l'affichage
+du terminal avant l'arrêt. Les glyphes ASCII dérivent de DejaVu Sans Mono.
 
 ## Validation et limites des preuves
 
-Les tests hôte couvrent l'allocateur, le chargeur ELF hostile et TahaFS avec
+Les tests hôte couvrent le modèle d'édition (insertion, suppression, navigation,
+retour visuel à la ligne, saturation et refus de texte invalide), l'allocateur, le chargeur ELF hostile et TahaFS avec
 échec d'écriture et corruption d'une banque. Les tests ELF contrôlent l'entrée,
 les segments et l'absence de symboles/runtime non résolus. Les tests QEMU
-couvrent les démarrages, l'entrée série et PS/2, le framebuffer, la préemption
+couvrent les démarrages, l'entrée série et PS/2, le framebuffer, les clics,
+le déplacement et la fermeture/réouverture des fenêtres, la sauvegarde et le
+rechargement de Notes à froid, son aperçu dans Files, la création de dossiers et
+de documents nommés, l'édition au curseur par clic et clavier, les dialogues
+d'annulation/erreur et la maximisation/restauration, la préemption
 de deux boucles CPU, la récupération des pages après sortie/kill, les fautes
 utilisateur, les protections de pages et les redémarrages avec données.
 

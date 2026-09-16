@@ -1,7 +1,7 @@
 # TahaOS 0.4
 
 TahaOS est un petit système d'exploitation autonome en C++20 pour x86-64.
-Il démarre son propre noyau, affiche un terminal, exécute un shell en mode
+Il démarre son propre noyau, affiche un bureau graphique, exécute un shell en mode
 utilisateur, ordonnance plusieurs programmes et conserve les fichiers sur un
 disque virtuel. Il fonctionne dans QEMU, sans Linux à l'intérieur de la machine
 virtuelle.
@@ -18,9 +18,51 @@ Dans cet espace de travail, les outils QEMU et xorriso sont disponibles dans
 make desktop
 ```
 
-Le terminal s'affiche dans une fenêtre QEMU, avec un clavier **QWERTY US**.
-La barre latérale est un aide-mémoire ; elle ne contient pas de boutons cliquables.
-Le système n'a pas de souris ni de gestionnaire de fenêtres.
+Le bureau s'affiche dans une fenêtre QEMU, avec un clavier **QWERTY US** et
+une souris PS/2. Cliquer sur **Terminal**, **Files** ou **Notes** dans la barre
+inférieure pour ouvrir ou retrouver une application. Cliquer dans une fenêtre
+lui donne le clavier ; glisser sa barre de titre la déplace. **+** maximise la
+fenêtre, **o** restaure sa taille, **_** la réduit et **x** ferme l’application. Notes propose de sauvegarder les
+modifications avant de quitter ; réduire conserve le document ouvert.
+Fermer Terminal masque sa fenêtre et conserve le shell. **F1/F2/F3** ouvrent Terminal/Files/Notes ; **Alt+Tab**
+parcourt les fenêtres visibles.
+
+- **Terminal** : le shell et ses programmes utilisateur existants, avec un écran
+  d'accueil qui rappelle les raccourcis.
+- **Files** : parcourir les répertoires par clic, remonter avec **Up**, revenir
+  avec **Home**, actualiser avec **Refresh**, changer de page avec **Prev/Next**.
+  **Folder** crée un répertoire avec un chemin absolu, par exemple `/home/projets`.
+  Un clic sur un fichier affiche un aperçu ASCII de 2047 octets maximum.
+  **Edit in Notes** ouvre le document dans l'éditeur, y compris les textes plus
+  grands que l'aperçu. **Refresh** revient à la liste.
+- **Notes** : éditeur de texte ASCII de **32 Kio**, avec insertion au curseur,
+  flèches, Home/End, Page Up/Down, Delete et Retour arrière. Cliquer dans le texte
+  place le curseur ; le défilement et le retour visuel à la ligne suivent celui-ci.
+  **Undo** (`Ctrl+Z`) et **Redo** (`Ctrl+Y`) parcourent les 256 dernières
+  insertions/suppressions ; revenir à la version enregistrée retire le marqueur
+  de modification. Ouvrir un autre document efface cet historique.
+  **Save** (`Ctrl+S`) enregistre ; **Save As** (`Ctrl+Shift+S`) choisit un autre nom ;
+  **Open** (`Ctrl+O`) ouvre un fichier ; **New** (`Ctrl+N`) commence un document.
+  Les champs de chemin sont présélectionnés : taper remplace la valeur proposée,
+  `Ctrl+A` la sélectionne à nouveau, Entrée valide, Échap annule.
+  Changer de document propose **Save / Discard / Cancel** s'il reste des
+  modifications. Save As demande confirmation avant de remplacer un autre fichier.
+  Les fichiers système en lecture seule peuvent être copiés avec Save As.
+
+`/home/desktop.txt` est le document ouvert par défaut au démarrage, s'il existe.
+Les autres documents sauvegardés restent accessibles depuis Files ou Open.
+Les modifications non enregistrées sont conservées lorsque la fenêtre est réduite,
+mais perdues au redémarrage. Fermer Notes propose Save / Discard / Cancel. Les fichiers binaires sont refusés sans remplacer
+le document courant. Les erreurs de lecture et d'enregistrement restent visibles.
+
+Le bureau reste limité à une instance de chaque application. Il propose
+maximisation/restauration, mais pas de redimensionnement libre, presse-papiers,
+sélection de texte. Files, Notes et le shell sont des programmes isolés en mode utilisateur.
+Le noyau compose leurs fenêtres et valide leurs commandes de dessin.
+Une faute ou un `kill` libère la fenêtre de l’application ; elle peut être relancée
+depuis la barre inférieure ou F2/F3. Le terminal
+conserve sa grille lors de la maximisation. Le mode graphique accepte les
+framebuffers RGB 32 bits de 640×480 à 1920×1080 ; QEMU utilise 1024×768 par défaut.
 
 Sans affichage graphique, utiliser la console série :
 
@@ -106,7 +148,9 @@ Ils s'exécutent au niveau de privilège 3, dans des espaces d'adressage distinc
 | `check` | `run check` teste les pointeurs invalides et les permissions |
 | `counter` | `bg counter` boucle sans céder le CPU ; le timer le préempte |
 | `fault` | `run fault kernel` provoque une faute limitée au processus |
-| `shell` | Shell initial, PID 1 ; seul processus autorisé à lire le clavier |
+| `shell` | Shell initial, PID 1 ; seul processus autorisé à lire la console |
+| `files`, `notes` | Applications graphiques isolées, lancées avec F2/F3 |
+| `guicheck` | `run guicheck` vérifie les fenêtres et les appels graphiques |
 
 `run` attend la fin du programme et affiche son code de sortie. Ctrl+C interrompt
 le programme au premier plan (code 130), annule une attente ou vide la ligne en
@@ -124,6 +168,8 @@ run /home/bonjour.elf
 
 L'ABI minimale est documentée dans [docs/architecture.md](docs/architecture.md)
 et définie dans `shared/abi.hpp`. `user/api.hpp` fournit les fonctions d'appel.
+L’interface graphique est définie dans `shared/gui.hpp` ; `user/gui.hpp` fournit
+les widgets et les dialogues utilisés par Files et Notes.
 Pour ajouter un programme embarqué, créer `user/nom.cpp`, ajouter son nom à
 `PROGRAMS` dans le Makefile et l'enregistrer dans `kernel/programs.cpp`.
 
@@ -148,10 +194,10 @@ pas persistants. Ce format n'est ni FAT ni ext4 et n'est pas montable par Linux.
 ## Vérification
 
 ```sh
-make check          # Allocateur, TahaFS, chargeur ELF, contrat binaire
+make check          # Editeur, allocateur, TahaFS, chargeur ELF, contrat binaire
 make smoke          # Démarrages BIOS avec 32, 128 et 512 Mio
 make system-smoke   # Processus, fautes isolées, fichiers, redémarrages
-make display-smoke  # Vrai clavier PS/2, framebuffer et capture PNG
+make display-smoke  # Clavier/souris, fenêtres, Notes, Files, redémarrage, PNG
 make fault-smoke    # Fautes fatales du noyau dans une ISO de diagnostic séparée
 ```
 
@@ -167,6 +213,7 @@ cet espace de travail.
 - 64 entrées de fichiers/répertoires, système inclus ; 32 Kio par fichier.
 - Environ 1 Mio de pages physiques au maximum par processus, tables comprises.
 - RAM utilisable gérée sous 4 Gio ; allocations statiques/bornées, sans heap général.
+- Bureau : deux buffers statiques réservent environ 16 Mio, même en mode série.
 - ELF statiques TahaOS uniquement, sans libc/POSIX ni compatibilité des exécutables Linux.
 - Appels système non préemptibles ; pas de garanties temps réel.
 - Pas de réseau, audio, USB, FPU/SIMD utilisateur, navigateur ou installation sur PC réel.

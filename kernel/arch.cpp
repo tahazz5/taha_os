@@ -2,6 +2,7 @@
 #include "console.hpp"
 #include "process.hpp"
 #include "keyboard.hpp"
+#include "display.hpp"
 #include <stddef.h>
 
 namespace {
@@ -68,7 +69,7 @@ void start_timer() {
     pic_write(0x21, 0x20); pic_write(0xa1, 0x28);
     pic_write(0x21, 4); pic_write(0xa1, 2);
     pic_write(0x21, 1); pic_write(0xa1, 1);
-    pic_write(0x21, 0xec); pic_write(0xa1, 0xff);
+    pic_write(0x21, 0xe8); pic_write(0xa1, 0xef);
     out(0x3f9, 1);
     constexpr uint16_t divisor = 11932; // approximately 100 Hz
     out(0x43, 0x36); out(0x40, divisor & 0xff); out(0x40, divisor >> 8);
@@ -85,6 +86,7 @@ extern "C" void interrupt_dispatch(arch::InterruptFrame* frame) {
         return;
     }
     if (frame->vector == 33) { keyboard::interrupt(); arch::out(0x20, 0x20); return; }
+    if (frame->vector == 44) { keyboard::interrupt(); arch::out(0xa0, 0x20); arch::out(0x20, 0x20); return; }
     if (frame->vector == 36) { console::receive_interrupt(); arch::out(0x20, 0x20); return; }
     if (frame->vector == 128) { process::syscall(frame); return; }
     if ((frame->cs & 3) == 3) { process::fault(frame); return; }
@@ -107,5 +109,6 @@ extern "C" void interrupt_dispatch(arch::InterruptFrame* frame) {
     if (frame->vector == 14) write(" (page fault)");
     write(" rip="); hex(frame->rip); write(" error="); hex(frame->error);
     write(" cr2="); hex(cr2); write(" rsp="); hex(frame->rsp); write("\n");
+    display::flush();
     arch::halt();
 }

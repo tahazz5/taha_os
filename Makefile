@@ -74,7 +74,7 @@ local-tools:
 
 -include $(OBJECTS:.o=.d)
 
-PROGRAMS := shell hello counter fault check cat
+PROGRAMS := shell hello counter fault check cat files notes guicheck
 USER_ELFS := $(addprefix $(BUILD)/user/,$(addsuffix .elf,$(PROGRAMS)))
 USERFLAGS := --target=x86_64-unknown-none-elf -std=c++20 -ffreestanding -fno-builtin \
 	-fno-exceptions -fno-rtti -fno-stack-protector -fno-pic -fno-pie \
@@ -84,7 +84,7 @@ USERFLAGS := --target=x86_64-unknown-none-elf -std=c++20 -ffreestanding -fno-bui
 $(BUILD)/user:
 	mkdir -p $@
 
-$(BUILD)/user/%.o: user/%.cpp user/api.hpp shared/abi.hpp Makefile | $(BUILD)/user
+$(BUILD)/user/%.o: user/%.cpp user/api.hpp shared/abi.hpp shared/gui.hpp user/gui.hpp Makefile | $(BUILD)/user
 	$(CXX) $(USERFLAGS) -c $< -o $@
 
 $(BUILD)/user/runtime.o: kernel/runtime.cpp Makefile | $(BUILD)/user
@@ -108,7 +108,8 @@ $(BUILD)/data.img:
 $(BUILD)/fs-test: tests/fs.cpp kernel/fs.cpp kernel/fs.hpp kernel/strings.hpp shared/abi.hpp | $(BUILD)
 	$(HOSTCXX) -std=c++20 -Wall -Wextra -Werror -O2 tests/fs.cpp kernel/fs.cpp -o $@
 
-test: $(BUILD)/pages-test $(BUILD)/fs-test $(BUILD)/loader-test $(BUILD)/user/hello.elf
+test: $(BUILD)/editor-test $(BUILD)/pages-test $(BUILD)/fs-test $(BUILD)/loader-test $(BUILD)/user/hello.elf
+	./$(BUILD)/editor-test
 	./$(BUILD)/pages-test
 	./$(BUILD)/fs-test
 	./$(BUILD)/loader-test $(BUILD)/user/hello.elf
@@ -132,3 +133,6 @@ desktop: all
 
 display-smoke: $(BUILD)/taha.iso
 	python3 tests/display.py --qemu $(QEMU) --iso $(BUILD)/taha.iso
+
+$(BUILD)/editor-test: tests/editor.cpp shared/text_editor.hpp | $(BUILD)
+	$(HOSTCXX) -std=c++20 -Wall -Wextra -Werror -O2 $< -o $@

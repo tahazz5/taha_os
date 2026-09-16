@@ -58,6 +58,6 @@ void number(uint64_t n, unsigned base) {
 void hex(uint64_t n) { write("0x"); number(n, 16); }
 [[noreturn]] void panic(const char* message) {
     asm volatile("cli");
-    write("\nPANIC: "); write(message); write("\n"); arch::halt();
+    write("\nPANIC: "); write(message); write("\n"); display::flush(); arch::halt();
 }
 }

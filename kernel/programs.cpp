@@ -8,6 +8,9 @@ PROGRAM(counter)
 PROGRAM(fault)
 PROGRAM(check)
 PROGRAM(cat)
+PROGRAM(files)
+PROGRAM(notes)
+PROGRAM(guicheck)
 void install_programs() {
 #define INSTALL(name) if (!fs::seed("/bin/" #name ".elf", app_##name##_start, \
     reinterpret_cast<uintptr_t>(app_##name##_end) - reinterpret_cast<uintptr_t>(app_##name##_start))) \
@@ -18,6 +21,9 @@ void install_programs() {
     INSTALL(fault)
     INSTALL(check)
     INSTALL(cat)
+    INSTALL(files)
+    INSTALL(notes)
+    INSTALL(guicheck)
     constexpr char welcome[] = "Bienvenue dans TahaOS.\n/home conserve vos fichiers sur le disque virtuel.\nTapez help pour les commandes et apps pour les programmes.\n";
     if (!fs::seed("/etc/welcome", welcome, sizeof(welcome) - 1)) console::panic("cannot install welcome file");
 }

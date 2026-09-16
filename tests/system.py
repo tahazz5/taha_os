@@ -42,6 +42,20 @@ def session(args, disk):
         baseline = memory(guest)
         guest.command(b'run hello "depuis le shell"', b'Hello from an ELF process in ring 3!')
         guest.command(b'run check', b'USERCHECK PASS')
+        gui = guest.command(b'run guicheck', b'GUICHECK PASS')
+        assert b'Exit status: 0' in gui
+        assert memory(guest) == baseline, 'GUI process leaked frames after closing/reopening its window'
+        gui_fault = guest.command(b'run guicheck fault', b'(terminated)')
+        assert b'fault vector=6' in gui_fault and b'Exit status: 134' in gui_fault
+        assert memory(guest) == baseline, 'Faulted GUI process leaked frames'
+        blocked = guest.command(b'bg guicheck wait', b'Started PID')
+        gui_pid = int(re.search(rb'Started PID (\d+)', blocked)[1])
+        if b'GUIWAIT ready' not in guest.output:
+            guest.expect(b'GUIWAIT ready')
+        ps = guest.command(b'ps', b'PID PPID TICKS STATE PROGRAM')
+        assert re.search(rb'\r?\n' + str(gui_pid).encode() + rb' 0 \d+ 6 /bin/guicheck.elf', ps), ps
+        guest.command(b'kill ' + str(gui_pid).encode(), b'taha>')
+        assert memory(guest) == baseline, 'GUI event waiter leaked frames when killed'
         guest.command(b'run cat /home/docs/note.txt', b'Bonjour TahaOS')
         guest.command(b'cp /bin/hello.elf docs/program.elf', b'taha>')
         guest.command(b'run docs/program.elf', b'Hello from an ELF process in ring 3!')
@@ -75,7 +89,7 @@ def session(args, disk):
         guest.send(b'halt\r')
         guest.expect(b'System halted.')
         assert b'PANIC' not in guest.output
-        print('PASS: userspace shell, ELF loading, syscall validation, process isolation and preemption', flush=True)
+        print('PASS: userspace shell, ELF loading, syscall validation, process isolation and preemption, GUI ownership/fault/wait cleanup', flush=True)
     finally:
         guest.close()
 

@@ -1,4 +1,5 @@
 #include "process.hpp"
+#include "display.hpp"
 #include "paging.hpp"
 #include "elf.hpp"
 #include "fs.hpp"
@@ -6,11 +7,11 @@
 #include "strings.hpp"
 #include "../shared/abi.hpp"
 namespace {
-enum State { free_slot, runnable, reading, waiting, sleeping, zombie };
+enum State { free_slot, runnable, reading, waiting, sleeping, zombie, window_wait };
 struct Task {
     paging::AddressSpace space;
     arch::InterruptFrame context;
-    uint64_t pid, parent, cpu_ticks, wake, child;
+    uint64_t pid, parent, cpu_ticks, wake, child, event_address;
     int64_t status;
     State state;
     char name[32];
@@ -19,6 +20,7 @@ constinit Task tasks[16]{};
 int current = -1;
 uint64_t next_pid = 1;
 uint8_t io_buffer[abi::file_max];
+gui::Command draw_buffer[gui::command_limit];
 constinit paging::AddressSpace kernel_space{};
 extern "C" [[noreturn]] void resume_user(arch::InterruptFrame* frame);
 Task* find(uint64_t pid) {
@@ -46,6 +48,7 @@ int64_t spawn(const char* path, const char* args, uint64_t parent) {
     return task->pid;
 }
 void terminate(Task& task, int64_t status) {
+    display::release(task.pid);
     task.status = status; task.state = zombie;
     for (auto& t : tasks) if (t.state != free_slot && t.parent == task.pid) t.parent = 0;
 }
@@ -65,6 +68,13 @@ void wake_tasks() {
         if (t.state == reading) {
             int c = console::read_char();
             if (c != -1) { t.context.rax = int64_t(c); t.state = runnable; }
+        } else if (t.state == window_wait) {
+            gui::Event event{};
+            int64_t result=display::event(t.pid,event);
+            if (result!=abi::again) {
+                if (result==0 && !paging::copy_to(t.space,t.event_address,&event,sizeof(event))) result=abi::invalid;
+                t.context.rax=result; t.state=runnable;
+            }
         } else if (t.state == sleeping && arch::ticks() >= t.wake) {
             t.context.rax = 0; t.state = runnable;
         } else if (t.state == waiting) {
@@ -82,6 +92,7 @@ void schedule(arch::InterruptFrame* frame) {
     if (current >= 0 && tasks[current].state != free_slot) tasks[current].context = *frame;
     paging::activate(kernel_space);
     for (;;) {
+        display::service();
         wake_tasks();
         for (int offset = 1; offset <= 16; ++offset) {
             int index = (current + offset) % 16;
@@ -103,6 +114,7 @@ bool text(const Task& t, uint64_t source, char* target, size_t capacity) {
 }
 }
 namespace process {
+int64_t launch(const char* path, const char* arguments) { return spawn(path,arguments,0); }
 void initialize() {
     size_t unused = 0;
     if (!fs::file("/bin/shell.elf", unused)) console::panic("shell executable missing");
@@ -110,6 +122,7 @@ void initialize() {
 }
 [[noreturn]] void start() {
     asm volatile("cli" : : : "memory");
+    display::ready();
     current = 0;
     paging::activate(tasks[0].space);
     resume_user(&tasks[0].context);
@@ -216,6 +229,27 @@ void syscall(arch::InterruptFrame* f) {
         }
         break;
     case abi::sync: result = fs::sync() ? 0 : abi::io; break;
+    case abi::window_open: {
+        gui::Config config{};
+        if (paging::copy_from(task.space,&config,f->rdi,sizeof(config))) result=display::open(task.pid,config);
+        break;
+    }
+    case abi::window_present:
+        if (f->rsi<=gui::command_limit && paging::copy_from(task.space,draw_buffer,f->rdi,f->rsi*sizeof(gui::Command)))
+            result=display::present(task.pid,draw_buffer,f->rsi);
+        break;
+    case abi::window_event: {
+        gui::Event event{};
+        if (f->rsi>1 || !paging::user_range(task.space,f->rdi,sizeof(event),true)) break;
+        result=display::event(task.pid,event);
+        if (result==0) paging::copy_to(task.space,f->rdi,&event,sizeof(event));
+        else if (result==abi::again && f->rsi==1) { task.event_address=f->rdi; task.state=window_wait; }
+        break;
+    }
+    case abi::window_close: display::release(task.pid); result=0; break;
+    case abi::desktop_launch:
+        if (f->rdi>=1 && f->rdi<=2 && text(task,f->rsi,path,sizeof(path))) result=display::launch(f->rdi,path);
+        break;
     case abi::reboot:
         if (task.pid != 1) { result = abi::denied; break; }
         if (fs::persistent() && !fs::sync()) { result = abi::io; break; }
