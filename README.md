@@ -1,5 +1,7 @@
 # TahaOS 0.4
 
+[![Kernel validation](https://github.com/tahazz5/taha_os/actions/workflows/kernel.yml/badge.svg)](https://github.com/tahazz5/taha_os/actions/workflows/kernel.yml)
+
 TahaOS est un petit système d'exploitation autonome en C++20 pour x86-64.
 Il démarre son propre noyau, affiche un bureau graphique, exécute un shell en mode
 utilisateur, ordonnance plusieurs programmes et conserve les fichiers sur un
